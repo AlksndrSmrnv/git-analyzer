@@ -57,7 +57,7 @@ private data class ClassScope(
 )
 
 private data class LineLexState(
-    var inBlockComment: Boolean = false,
+    var blockCommentDepth: Int = 0,
     var inTripleQuotedString: Boolean = false
 )
 
@@ -495,10 +495,14 @@ private object KotlinTestExtractor {
             val structureLine = parsedLine.codeOnly
             val trimmed = structureLine.trim()
             val classMatch = CLASS_DECL_REGEX.find(structureLine)
+            val funMatch = FUN_DECL_REGEX.find(parsedLine.funScanLine)
 
             if (pendingClassName != null) {
                 if (classMatch != null) {
                     // Previous class declaration had no body; do not bind it to another declaration's braces.
+                    pendingClassName = null
+                } else if (funMatch != null) {
+                    // A function declaration means the pending class was body-less; avoid binding to function body braces.
                     pendingClassName = null
                 } else if (parsedLine.codeOpenBraces > 0) {
                     classStack += ClassScope(name = pendingClassName!!, startDepth = braceDepth + 1)
@@ -506,7 +510,6 @@ private object KotlinTestExtractor {
                 }
             }
 
-            val funMatch = FUN_DECL_REGEX.find(parsedLine.funScanLine)
             if (trimmed.startsWith("@")) {
                 annotationBuffer += lineWithoutComment
                 linesSinceLastAnnotation = 0
@@ -611,9 +614,12 @@ private object KotlinTestExtractor {
         var stringEscape = false
 
         while (i < line.length) {
-            if (state.inBlockComment) {
-                if (i + 1 < line.length && line[i] == '*' && line[i + 1] == '/') {
-                    state.inBlockComment = false
+            if (state.blockCommentDepth > 0) {
+                if (i + 1 < line.length && line[i] == '/' && line[i + 1] == '*') {
+                    state.blockCommentDepth++
+                    i += 2
+                } else if (i + 1 < line.length && line[i] == '*' && line[i + 1] == '/') {
+                    state.blockCommentDepth--
                     i += 2
                 } else {
                     i++
@@ -672,7 +678,7 @@ private object KotlinTestExtractor {
             }
 
             if (i + 1 < line.length && line[i] == '/' && line[i + 1] == '*') {
-                state.inBlockComment = true
+                state.blockCommentDepth = 1
                 i += 2
                 continue
             }
