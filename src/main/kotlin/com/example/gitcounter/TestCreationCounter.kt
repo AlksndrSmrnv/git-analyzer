@@ -550,7 +550,9 @@ private object KotlinTestExtractor {
             if (classMatch != null && !trimmed.startsWith("companion object")) {
                 val className = classMatch.groupValues[2]
                 val declarationTail = structureLine.substring(classMatch.range.last + 1)
-                if (declarationTail.contains('{')) {
+                val tailOpenBraces = declarationTail.count { it == '{' }
+                val tailCloseBraces = declarationTail.count { it == '}' }
+                if (tailOpenBraces > tailCloseBraces) {
                     classStack += ClassScope(name = className, startDepth = braceDepth + 1)
                 } else {
                     pendingClassName = className
