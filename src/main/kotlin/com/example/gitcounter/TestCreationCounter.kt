@@ -478,10 +478,16 @@ private object KotlinTestExtractor {
         for (line in lines) {
             val lineWithoutComment = line.substringBefore("//")
             val trimmed = lineWithoutComment.trim()
+            val classMatch = CLASS_DECL_REGEX.find(lineWithoutComment)
 
-            if (pendingClassName != null && lineWithoutComment.contains('{')) {
-                classStack += ClassScope(name = pendingClassName!!, startDepth = braceDepth + 1)
-                pendingClassName = null
+            if (pendingClassName != null) {
+                if (classMatch != null) {
+                    // Previous class declaration had no body; do not bind it to another declaration's braces.
+                    pendingClassName = null
+                } else if (lineWithoutComment.contains('{')) {
+                    classStack += ClassScope(name = pendingClassName!!, startDepth = braceDepth + 1)
+                    pendingClassName = null
+                }
             }
 
             val funMatch = FUN_DECL_REGEX.find(lineWithoutComment)
@@ -525,7 +531,6 @@ private object KotlinTestExtractor {
                 linesSinceLastAnnotation = 0
             }
 
-            val classMatch = CLASS_DECL_REGEX.find(lineWithoutComment)
             if (classMatch != null && !trimmed.startsWith("companion object")) {
                 val className = classMatch.groupValues[2]
                 val declarationTail = lineWithoutComment.substring(classMatch.range.last + 1)
