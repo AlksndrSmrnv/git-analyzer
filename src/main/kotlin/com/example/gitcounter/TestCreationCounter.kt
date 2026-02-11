@@ -56,6 +56,18 @@ private data class ClassScope(
     val startDepth: Int
 )
 
+private data class LineLexState(
+    var inBlockComment: Boolean = false,
+    var inTripleQuotedString: Boolean = false
+)
+
+private data class ParsedLine(
+    val commentStripped: String,
+    val codeOnly: String,
+    val codeOpenBraces: Int,
+    val codeCloseBraces: Int
+)
+
 private data class TestInfo(
     val testId: String,
     val fqcn: String,
@@ -474,17 +486,20 @@ private object KotlinTestExtractor {
         var usedFallbackClassName = false
         val annotationBuffer = mutableListOf<String>()
         var linesSinceLastAnnotation = 0
+        val lexState = LineLexState()
 
         for (line in lines) {
-            val lineWithoutComment = line.substringBefore("//")
-            val trimmed = lineWithoutComment.trim()
-            val classMatch = CLASS_DECL_REGEX.find(lineWithoutComment)
+            val parsedLine = parseKotlinLine(line, lexState)
+            val lineWithoutComment = parsedLine.commentStripped
+            val structureLine = parsedLine.codeOnly
+            val trimmed = structureLine.trim()
+            val classMatch = CLASS_DECL_REGEX.find(structureLine)
 
             if (pendingClassName != null) {
                 if (classMatch != null) {
                     // Previous class declaration had no body; do not bind it to another declaration's braces.
                     pendingClassName = null
-                } else if (lineWithoutComment.contains('{')) {
+                } else if (parsedLine.codeOpenBraces > 0) {
                     classStack += ClassScope(name = pendingClassName!!, startDepth = braceDepth + 1)
                     pendingClassName = null
                 }
@@ -533,7 +548,7 @@ private object KotlinTestExtractor {
 
             if (classMatch != null && !trimmed.startsWith("companion object")) {
                 val className = classMatch.groupValues[2]
-                val declarationTail = lineWithoutComment.substring(classMatch.range.last + 1)
+                val declarationTail = structureLine.substring(classMatch.range.last + 1)
                 if (declarationTail.contains('{')) {
                     classStack += ClassScope(name = className, startDepth = braceDepth + 1)
                 } else {
@@ -541,9 +556,7 @@ private object KotlinTestExtractor {
                 }
             }
 
-            val opens = lineWithoutComment.count { it == '{' }
-            val closes = lineWithoutComment.count { it == '}' }
-            braceDepth = (braceDepth + opens - closes).coerceAtLeast(0)
+            braceDepth = (braceDepth + parsedLine.codeOpenBraces - parsedLine.codeCloseBraces).coerceAtLeast(0)
 
             while (classStack.isNotEmpty() && braceDepth < classStack.last().startDepth) {
                 classStack.removeAt(classStack.lastIndex)
@@ -580,5 +593,143 @@ private object KotlinTestExtractor {
         val literal = STRING_LITERAL_REGEX.find(rawArg)?.groupValues?.get(1)
         return literal?.replace("\\\"", "\"")?.replace("\\n", "\n")?.trim()
             ?: rawArg.trim().ifBlank { null }
+    }
+
+    private fun parseKotlinLine(line: String, state: LineLexState): ParsedLine {
+        val stripped = StringBuilder()
+        val codeOnly = StringBuilder()
+        var codeOpenBraces = 0
+        var codeCloseBraces = 0
+
+        var i = 0
+        var inBacktick = false
+        var inString = false
+        var stringEscape = false
+
+        while (i < line.length) {
+            if (state.inBlockComment) {
+                if (i + 1 < line.length && line[i] == '*' && line[i + 1] == '/') {
+                    state.inBlockComment = false
+                    i += 2
+                } else {
+                    i++
+                }
+                continue
+            }
+
+            if (state.inTripleQuotedString) {
+                if (i + 2 < line.length && line[i] == '"' && line[i + 1] == '"' && line[i + 2] == '"') {
+                    stripped.append("\"\"\"")
+                    codeOnly.append("   ")
+                    state.inTripleQuotedString = false
+                    i += 3
+                } else {
+                    stripped.append(line[i])
+                    codeOnly.append(' ')
+                    i++
+                }
+                continue
+            }
+
+            if (inString) {
+                val ch = line[i]
+                stripped.append(ch)
+                codeOnly.append(' ')
+
+                if (ch == '\\' && !stringEscape) {
+                    stringEscape = true
+                } else {
+                    if (ch == '"' && !stringEscape) {
+                        inString = false
+                    }
+                    stringEscape = false
+                }
+                i++
+                continue
+            }
+
+            if (inBacktick) {
+                val ch = line[i]
+                stripped.append(ch)
+                codeOnly.append(' ')
+                if (ch == '`') {
+                    inBacktick = false
+                }
+                i++
+                continue
+            }
+
+            if (i + 1 < line.length && line[i] == '/' && line[i + 1] == '/') {
+                break
+            }
+
+            if (i + 1 < line.length && line[i] == '/' && line[i + 1] == '*') {
+                state.inBlockComment = true
+                i += 2
+                continue
+            }
+
+            if (i + 2 < line.length && line[i] == '"' && line[i + 1] == '"' && line[i + 2] == '"') {
+                stripped.append("\"\"\"")
+                codeOnly.append("   ")
+                state.inTripleQuotedString = true
+                i += 3
+                continue
+            }
+
+            val ch = line[i]
+            when (ch) {
+                '"' -> {
+                    inString = true
+                    stringEscape = false
+                    stripped.append(ch)
+                    codeOnly.append(' ')
+                    i++
+                }
+                '`' -> {
+                    inBacktick = true
+                    stripped.append(ch)
+                    codeOnly.append(' ')
+                    i++
+                }
+                '\'' -> {
+                    stripped.append(ch)
+                    codeOnly.append(' ')
+                    i++
+                    var escape = false
+                    while (i < line.length) {
+                        val charCh = line[i]
+                        stripped.append(charCh)
+                        codeOnly.append(' ')
+                        i++
+                        if (charCh == '\\' && !escape) {
+                            escape = true
+                            continue
+                        }
+                        if (charCh == '\'' && !escape) {
+                            break
+                        }
+                        escape = false
+                    }
+                }
+                else -> {
+                    stripped.append(ch)
+                    codeOnly.append(ch)
+                    if (ch == '{') {
+                        codeOpenBraces++
+                    } else if (ch == '}') {
+                        codeCloseBraces++
+                    }
+                    i++
+                }
+            }
+        }
+
+        return ParsedLine(
+            commentStripped = stripped.toString(),
+            codeOnly = codeOnly.toString(),
+            codeOpenBraces = codeOpenBraces,
+            codeCloseBraces = codeCloseBraces
+        )
     }
 }
