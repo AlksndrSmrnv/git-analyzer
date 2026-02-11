@@ -27,9 +27,10 @@ private val PACKAGE_REGEX = Regex("""(?m)^\s*package\s+([A-Za-z_][A-Za-z0-9_.]*)
 private val CLASS_DECL_REGEX = Regex("""\b(class|object)\s+([A-Za-z_][A-Za-z0-9_]*)\b""")
 private val TEST_ANNOTATION_REGEX = Regex("""@(?:org\.junit\.jupiter\.api\.)?Test\b""")
 private val DISPLAY_NAME_REGEX =
-    Regex("""@(?:org\.junit\.jupiter\.api\.)?DisplayName\s*\((.*?)\)""", setOf(RegexOption.DOT_MATCHES_ALL))
-private val STRING_LITERAL_REGEX =
-    Regex("\"((?:\\\\.|[^\"\\\\])*)\"", setOf(RegexOption.DOT_MATCHES_ALL))
+    Regex(
+        """@(?:org\.junit\.jupiter\.api\.)?DisplayName\s*\(\s*"((?:\\.|[^"\\])*)"\s*\)""",
+        setOf(RegexOption.DOT_MATCHES_ALL)
+    )
 private val FUN_DECL_REGEX =
     Regex("""\bfun\s+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)\s*\(""")
 
@@ -557,8 +558,12 @@ private object KotlinTestExtractor {
                 val tailCloseBraces = declarationTail.count { it == '}' }
                 if (tailOpenBraces > tailCloseBraces) {
                     classStack += ClassScope(name = className, startDepth = braceDepth + 1)
-                } else {
+                } else if (tailOpenBraces == 0 && tailCloseBraces == 0) {
+                    // Class body starts later (e.g. "class Foo" then next line "{").
                     pendingClassName = className
+                } else {
+                    // Braces are balanced (e.g. "class Foo { }"): no open class scope to track.
+                    pendingClassName = null
                 }
             }
 
@@ -595,10 +600,12 @@ private object KotlinTestExtractor {
 
     private fun extractDisplayName(annotationText: String): String? {
         val displayMatch = DISPLAY_NAME_REGEX.find(annotationText) ?: return null
-        val rawArg = displayMatch.groupValues[1]
-        val literal = STRING_LITERAL_REGEX.find(rawArg)?.groupValues?.get(1)
-        return literal?.replace("\\\"", "\"")?.replace("\\n", "\n")?.trim()
-            ?: rawArg.trim().ifBlank { null }
+        val literal = displayMatch.groupValues[1]
+        return literal
+            .replace("\\\"", "\"")
+            .replace("\\n", "\n")
+            .trim()
+            .ifBlank { null }
     }
 
     private fun parseKotlinLine(line: String, state: LineLexState): ParsedLine {
