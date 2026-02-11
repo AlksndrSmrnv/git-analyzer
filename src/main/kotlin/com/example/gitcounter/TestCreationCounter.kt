@@ -63,6 +63,7 @@ private data class LineLexState(
 
 private data class ParsedLine(
     val commentStripped: String,
+    val funScanLine: String,
     val codeOnly: String,
     val codeOpenBraces: Int,
     val codeCloseBraces: Int
@@ -505,7 +506,7 @@ private object KotlinTestExtractor {
                 }
             }
 
-            val funMatch = FUN_DECL_REGEX.find(lineWithoutComment)
+            val funMatch = FUN_DECL_REGEX.find(parsedLine.funScanLine)
             if (trimmed.startsWith("@")) {
                 annotationBuffer += lineWithoutComment
                 linesSinceLastAnnotation = 0
@@ -597,6 +598,7 @@ private object KotlinTestExtractor {
 
     private fun parseKotlinLine(line: String, state: LineLexState): ParsedLine {
         val stripped = StringBuilder()
+        val funScan = StringBuilder()
         val codeOnly = StringBuilder()
         var codeOpenBraces = 0
         var codeCloseBraces = 0
@@ -620,11 +622,13 @@ private object KotlinTestExtractor {
             if (state.inTripleQuotedString) {
                 if (i + 2 < line.length && line[i] == '"' && line[i + 1] == '"' && line[i + 2] == '"') {
                     stripped.append("\"\"\"")
+                    funScan.append("   ")
                     codeOnly.append("   ")
                     state.inTripleQuotedString = false
                     i += 3
                 } else {
                     stripped.append(line[i])
+                    funScan.append(' ')
                     codeOnly.append(' ')
                     i++
                 }
@@ -634,6 +638,7 @@ private object KotlinTestExtractor {
             if (inString) {
                 val ch = line[i]
                 stripped.append(ch)
+                funScan.append(' ')
                 codeOnly.append(' ')
 
                 if (ch == '\\' && !stringEscape) {
@@ -651,6 +656,7 @@ private object KotlinTestExtractor {
             if (inBacktick) {
                 val ch = line[i]
                 stripped.append(ch)
+                funScan.append(ch)
                 codeOnly.append(' ')
                 if (ch == '`') {
                     inBacktick = false
@@ -671,6 +677,7 @@ private object KotlinTestExtractor {
 
             if (i + 2 < line.length && line[i] == '"' && line[i + 1] == '"' && line[i + 2] == '"') {
                 stripped.append("\"\"\"")
+                funScan.append("   ")
                 codeOnly.append("   ")
                 state.inTripleQuotedString = true
                 i += 3
@@ -683,23 +690,27 @@ private object KotlinTestExtractor {
                     inString = true
                     stringEscape = false
                     stripped.append(ch)
+                    funScan.append(' ')
                     codeOnly.append(' ')
                     i++
                 }
                 '`' -> {
                     inBacktick = true
                     stripped.append(ch)
+                    funScan.append(ch)
                     codeOnly.append(' ')
                     i++
                 }
                 '\'' -> {
                     stripped.append(ch)
+                    funScan.append(' ')
                     codeOnly.append(' ')
                     i++
                     var escape = false
                     while (i < line.length) {
                         val charCh = line[i]
                         stripped.append(charCh)
+                        funScan.append(' ')
                         codeOnly.append(' ')
                         i++
                         if (charCh == '\\' && !escape) {
@@ -714,6 +725,7 @@ private object KotlinTestExtractor {
                 }
                 else -> {
                     stripped.append(ch)
+                    funScan.append(ch)
                     codeOnly.append(ch)
                     if (ch == '{') {
                         codeOpenBraces++
@@ -727,6 +739,7 @@ private object KotlinTestExtractor {
 
         return ParsedLine(
             commentStripped = stripped.toString(),
+            funScanLine = funScan.toString(),
             codeOnly = codeOnly.toString(),
             codeOpenBraces = codeOpenBraces,
             codeCloseBraces = codeCloseBraces
